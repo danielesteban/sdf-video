@@ -1,219 +1,8 @@
 import './main.css';
 import { Presentation } from './presentation';
+import alea from 'alea';
 
 const grid = 16;
-
-const operations = {
-  'opUnion': (a: number, b: number) => {
-    return Math.min(a, b);
-  },
-  'opSubtraction': (a: number, b: number) => {
-    return Math.max(a, -b);
-  },
-  'opIntersection': (a: number, b: number) => {
-    return Math.max(a, b);
-  },
-};
-
-const getShapes = () => {
-  const size = p.getSize();
-  const origin = {
-    x: (Math.floor(size.x * 0.5 / grid) + 0.5) * grid,
-    y: (Math.floor(size.y * 0.5 / grid) + 0.5) * grid,
-  };
-  return [
-    {
-      x: origin.x - 4 * grid,
-      y: origin.y - 4 * grid,
-      radius: 8 * grid,
-    },
-    {
-      x: origin.x + 4 * grid,
-      y: origin.y + 4 * grid,
-      radius: 8 * grid,
-    },
-  ];
-};
-
-const getCSGAnimation = (operation: keyof typeof operations, animateShapes = false) => () => {
-  const shapes = getShapes();
-  const size = p.getSize();
-  const cells = {
-    x: Math.ceil(size.x / grid),
-    y: Math.ceil(size.y / grid),
-  };
-  const distances = new Float32Array(cells.x * cells.y);
-  for (let y = 0, i = 0; y < cells.y; y += 1) {
-    for (let x = 0; x < cells.x; x += 1, i += 1) {
-      distances[i] = shapes.reduce((d, shape, i) => {
-        const s = Math.sqrt((shape.x - (x + 0.5) * grid) ** 2 + (shape.y - (y + 0.5) * grid) ** 2) - shape.radius;
-        if (i === 0) {
-          return operations.opUnion(d, s);
-        } else {
-          return operations[operation](d, s);
-        }
-      }, 10000);
-    }
-  }
-  p.setAnimation((time) => {
-    p.drawGrid(grid);
-    for (const shape of shapes) {
-      p.drawCircle(shape.x, shape.y, shape.radius, animateShapes ? time : null);
-    }
-    if (!animateShapes) {
-      p.drawLabels(distances, grid, time);
-    } else {
-      drawSelected(shapes);
-    }
-  });
-  p.setProgram(/* glsl */`
-    float d = 10000.0;
-    float s;
-    float r;
-    ${shapes.map((shape, i) => /* glsl */`
-      r = float(${shape.radius});
-      ${animateShapes ? /* glsl */`
-        r = min(r * time, r);
-      ` : ''}
-      s = sdCircle(fragPixel - vec2(float(${shape.x}), float(${shape.y})), r);
-      ${i === 0 ? /* glsl */`
-        d = opUnion(d, s);
-      ` : /* glsl */`
-        d = ${operation}(d, s);
-      `}
-    `).join('\n')}
-    float alpha = (1.0 - smoothstep(-0.5, 0.5, d)) * 0.75;
-    vec3 color = vec3(${32.0 / 255}, ${138 / 255}, ${78 / 255});
-    gl_FragColor = vec4(color * alpha, alpha);
-  `);
-};
-
-const getInvertedSDFAnimation = (animateShape = false) => () => {
-  const size = p.getSize();
-  const shape = {
-    x: (Math.floor(size.x * 0.5 / grid) + 0.5) * grid,
-    y: (Math.floor(size.y * 0.5 / grid) + 0.5) * grid,
-    radius: 8 * grid,
-  };
-  const cells = {
-    x: Math.ceil(size.x / grid),
-    y: Math.ceil(size.y / grid),
-  };
-  const distances = new Float32Array(cells.x * cells.y);
-  for (let y = 0, i = 0; y < cells.y; y += 1) {
-    for (let x = 0; x < cells.x; x += 1, i += 1) {
-      distances[i] = (Math.sqrt((shape.x - (x + 0.5) * grid) ** 2 + (shape.y - (y + 0.5) * grid) ** 2) - shape.radius) * -1;
-    }
-  }
-  p.setAnimation((time) => {
-    p.drawGrid(grid);
-    p.drawCircle(shape.x, shape.y, shape.radius, animateShape ? time : null);
-    if (!animateShape) {
-      p.drawLabels(distances, grid, time);
-    } else {
-      drawSelected([shape]);
-    }
-  });
-  p.setProgram(/* glsl */`
-    float r = float(${shape.radius});
-    ${animateShape ? /* glsl */`
-      r = min(r * time, r);
-    ` : ''}
-    float d = sdCircle(fragPixel - vec2(float(${shape.x}), float(${shape.y})), r) * -1.0;
-    float alpha = (1.0 - smoothstep(-0.5, 0.5, d)) * 0.75;
-    vec3 color = vec3(${32.0 / 255}, ${138 / 255}, ${78 / 255});
-    gl_FragColor = vec4(color * alpha, alpha);
-  `);
-};
-
-const getCoolDudeAnimation = (step: number) => () => {
-  p.setAnimation(() => {
-    p.drawGrid(grid);
-  });
-  const size = p.getSize();
-  const origin = {
-    x: (Math.floor(size.x * 0.5 / grid) + 0.5) * grid,
-    y: (Math.floor(size.y * 0.5 / grid) + 0.5) * grid,
-  };
-  p.setProgram(/* glsl */`
-    // head
-    float d = sdCircle(fragPixel - vec2(float(${origin.x}), float(${origin.y})), 128.0);
-    ${step > 1 ? /* glsl */`
-      // eyes
-      d = opSubtraction(
-        d,
-        sdCircle(
-          fragPixel - vec2(float(${origin.x} - 48), float(${origin.y} - 48)) ${step > 2 ? /* glsl */`+ vec2(cos(time * -8.0) * 4.0, sin(time * -4.0) * 2.0)` : ''},
-          24.0 ${step > 2 ? /* glsl */`+ sin(time * 8.0) * 4.0` : ''}
-        )
-      );
-      d = opSubtraction(
-        d,
-        sdCircle(
-          fragPixel - vec2(float(${origin.x} + 48), float(${origin.y} - 48)) ${step > 2 ? /* glsl */`+ vec2(cos(time * 8.0) * 4.0, sin(time * 4.0) * 2.0)` : ''},
-          24.0 ${step > 2 ? /* glsl */`+ sin(PI + time * 8.0) * 4.0` : ''}
-        )
-      );
-    ` : ''}
-    ${step > 3 ? /* glsl */`
-      // mouth
-      d = opSubtraction(
-        d,
-        sdCircle(
-          (fragPixel - vec2(float(${origin.x}), float(${origin.y} + 64))) / vec2(4.0, ${step > 4 ? /* glsl */`0.5 + sin(time * 8.0) * 0.25 + pow(sin(time * 8.0), 4.0)` : /* glsl */`2.0`}),
-          16.0
-        )
-      );
-    ` : ''}
-    ${step > 5 ? /* glsl */`
-      // ears
-      d = opSmoothUnion(
-        d,
-        sdCircle(
-          fragPixel - vec2(float(${origin.x} - 128), float(${origin.y} - 128)) + vec2(cos(time * 4.0), sin(time * 4.0)) * 4.0,
-          32.0
-        ),
-        64.0
-      );
-      d = opSmoothUnion(
-        d,
-        sdCircle(
-          fragPixel - vec2(float(${origin.x} + 128), float(${origin.y} - 128)) + vec2(cos(time * -4.0), sin(time * -4.0)) * 4.0,
-          32.0
-        ),
-        64.0
-      );
-    ` : ''}
-    ${step > 7 ? /* glsl */`
-      // displacement
-      d += sin((fragPixel.x - float(${origin.x})) / (PI + sin(time * 0.5)))
-          * sin((fragPixel.y - float(${origin.y})) / (PI + sin(time * 0.5)))
-          * 4.0;
-    ` : ''}
-    float alpha = 1.0 - smoothstep(-0.5, 0.5, d);
-    vec3 color = vec3(${32.0 / 255}, ${138 / 255}, ${78 / 255});
-    ${step > 6 ? /* glsl */`
-      if (alpha > 0.0) {
-        // lighting
-        vec3 normal = normalize(vec3(fragPixel.x - float(${origin.x}), fragPixel.y - float(${origin.y}), -128.0));
-        color *= 0.1
-        + max(dot(
-          normal,
-          normalize(vec3(-1.0, 1.0, 0.0))
-        ), 0.0) * vec3(1.0, 0.0, 0.0)
-        + max(dot(
-          normal,
-          normalize(vec3(1.0, -1.0, 0.0))
-        ), 0.0) * vec3(0.0, 0.0, 1.0)
-        + max(dot(
-          normal,
-          normalize(vec3(0.0, 0.0, -1.0))
-        ), 0.0) * vec3(1.0, 1.0, 0.0);
-      }
-    ` : ''}
-    gl_FragColor = vec4(color * alpha, alpha);
-  `);
-};
 
 const drawSelected = (shapes: { x: number; y: number; radius: number }[]) => {
   const selected = p.getSelected();
@@ -230,20 +19,141 @@ const drawSelected = (shapes: { x: number; y: number; radius: number }[]) => {
   }
 };
 
+const getRandomShapes = (seed: number) => {
+  const size = p.getSize();
+  const origin = {
+    x: (Math.floor(size.x * 0.5 / grid) + 0.5) * grid,
+    y: (Math.floor(size.y * 0.5 / grid) + 0.5) * grid,
+  };
+  const prng = alea(seed);
+  const shapes: Parameters<Presentation['computeDistances']>[0] = Array.from({ length: 8 }, (_, i) => ({
+    x: origin.x + Math.floor((prng() - 0.5) * 24) * grid,
+    y: origin.y + Math.floor((prng() - 0.5) * 48) * grid,
+    radius: (3 + Math.floor(i / 2)) * grid,
+    operation: 'opUnion',
+  }));
+  return shapes;
+};
+
+const getShapes = () => {
+  // const testSeed = (seed: number) => {
+  //   const shapes = getRandomShapes(seed);
+  //   return !shapes.find((a) => (
+  //     !!shapes.find((b) => (
+  //       b !== a
+  //       && (
+  //         Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2) < (a.radius + b.radius + 48)
+  //       )
+  //     ))
+  //   ));
+  // };
+  // const findSeed = () => {
+  //   for (let i = 0; i < 1000; i++) {
+  //     const seed = Math.floor(Math.random() * 0xFFFFFFFF);
+  //     if (testSeed(seed)) {
+  //       console.log('FOUND IT!');
+  //       console.log('Seed:', seed);
+  //       return;
+  //     }
+  //   }
+  //   setTimeout(findSeed, 0);
+  // };
+  // findSeed();
+  return getRandomShapes(1585837567);
+};
+
+const getRaymarchAnimation = (rayAngle: number, initialStep: number = -2) => () => {
+  const shapes = getShapes();
+  const size = p.getSize();
+  const distances = p.computeDistances(shapes, grid);
+
+  const origin = {
+    x: (Math.floor(size.x * 0.5 / grid) + 0.5) * grid,
+    y: (Math.floor(size.y * 0.5 / grid) + 0.5) * grid,
+  };
+  const ray = {
+    origin: { x: origin.x - 240, y: origin.y + 48 },
+    direction: { x: Math.cos(rayAngle), y: Math.sin(rayAngle) },
+    distance: 0,
+  };
+  let point = { ...ray.origin };
+  const steps: { x: number; y: number; distance: number }[] = [];
+  const minDistance = grid * 0.5;
+
+  let step = initialStep;
+  p.setAnimation((time) => {
+    p.drawGrid(grid);
+    for (const shape of shapes) {
+      p.drawCircle(shape.x, shape.y, shape.radius, step === -2 ? time : null);
+    }
+    if (step >= -1) {
+      p.drawLabels(distances, grid, step === -1 ? time : null);
+    }
+    if (step >= 0) {
+      p.drawRay(ray, steps, time);
+    }
+    drawSelected(shapes);
+  });
+  p.setOnNext(() => {
+    step = step + 1;
+    if (step < 0) {
+      setProgram();
+      return;
+    }
+    if (step === 0) {
+      return;
+    }
+    const distance = Presentation.computeDistance(shapes, point);
+    steps.push({
+      x: point.x,
+      y: point.y,
+      distance,
+    });
+    ray.distance += Math.max(distance, minDistance);
+    point = {
+      x: ray.origin.x + ray.direction.x * ray.distance,
+      y: ray.origin.y + ray.direction.y * ray.distance,
+    };
+    if (
+      point.x < 0 || point.x > size.x
+      || point.y < 0 || point.y > size.y
+      || distance <= minDistance
+    ) {
+      p.setOnNext(null);
+    }
+  });
+  const setProgram = () => p.setProgram(/* glsl */`
+    float d;
+    float s;
+    float r;
+    ${shapes.map((shape, i) => /* glsl */`
+      r = float(${shape.radius});
+      ${step === -2 ? /* glsl */`
+        r = min(r * time, r);
+      ` : ''}
+      s = sdCircle(fragPixel - vec2(float(${shape.x}), float(${shape.y})), r);
+      ${i === 0 ? /* glsl */`
+        d = s;
+      ` : /* glsl */`
+        d = ${shape.operation}(d, s);
+      `}
+    `).join('\n')}
+    float alpha = (1.0 - smoothstep(-0.5, 0.5, d)) * 0.75;
+    vec3 color = vec3(${32.0 / 255}, ${138 / 255}, ${78 / 255});
+    gl_FragColor = vec4(color * alpha, alpha);
+  `);
+  setProgram();
+};
+
 const steps = [
   () => {
     p.setAnimation(() => {
-      p.drawText(['Why should', 'I care about', 'SDFs?', '(ep. 2)']);
+      p.drawText(['Why should', 'I care about', 'SDFs?', '(ep. 3)']);
     });
   },
   () => {
     p.setAnimation(() => {
-      p.drawText(['C', 'S', 'G']);
-    });
-  },
-  () => {
-    p.setAnimation(() => {
-      p.drawText(['Constructive', 'Solid', 'Geometry']);
+      p.drawText(['Sphere', 'Tracing']);
     });
   },
   () => {
@@ -251,44 +161,8 @@ const steps = [
       p.drawGrid(grid, time);
     });
   },
-  () => {
-    const shapes = getShapes();
-    p.setAnimation((time) => {
-      p.drawGrid(grid);
-      for (const shape of shapes) {
-        p.drawCircle(shape.x, shape.y, shape.radius, time);
-      }
-      drawSelected(shapes);
-    });
-  },
-  () => {
-    p.setAnimation(() => {
-      p.drawText(['Union', 'min(a, b)']);
-    });
-  },
-  getCSGAnimation('opUnion', true),
-  getCSGAnimation('opUnion'),
-  () => {
-    p.setAnimation(() => {
-      p.drawText(['Intersection', 'max(a, b)']);
-    });
-  },
-  getCSGAnimation('opIntersection', true),
-  getCSGAnimation('opIntersection'),
-  () => {
-    p.setAnimation(() => {
-      p.drawText(['What happens', 'when you invert', 'a SDF?']);
-    });
-  },
-  getInvertedSDFAnimation(true),
-  getInvertedSDFAnimation(),
-  () => {
-    p.setAnimation(() => {
-      p.drawText(['Subtraction', 'max(a, -b)']);
-    });
-  },
-  getCSGAnimation('opSubtraction', true),
-  getCSGAnimation('opSubtraction'),
+  getRaymarchAnimation(Math.PI * -0.25),
+  getRaymarchAnimation(Math.PI * -0.3, 0),
   () => {
     p.setAnimation(() => {
       p.drawText(['OK Computer.', "That's cool,", 'I guess.']);
@@ -296,17 +170,77 @@ const steps = [
   },
   () => {
     p.setAnimation(() => {
-      p.drawText(['But...', "What can I do", 'with this?']);
+      p.drawText(['But...', 'What can I do', 'with this?']);
     });
   },
-  getCoolDudeAnimation(1),
-  getCoolDudeAnimation(2),
-  getCoolDudeAnimation(3),
-  getCoolDudeAnimation(4),
-  getCoolDudeAnimation(5),
-  getCoolDudeAnimation(6),
-  getCoolDudeAnimation(7),
-  getCoolDudeAnimation(8),
+  () => {
+    const shapes = getShapes();
+    const size = p.getSize();
+    const minDistance = 0.1;
+    const maxDistance = Math.sqrt((size.x ** 2) + (size.y ** 2));
+    p.setAnimation(() => {
+      p.drawGrid(grid);
+      for (const shape of shapes) {
+        p.drawCircle(shape.x, shape.y, shape.radius);
+      }
+      const hover = p.getHover();
+      const selected = p.getSelected();
+      if (hover && !selected) {
+        p.setUniformVec2('lightPos', hover);
+      }
+    });
+    p.setProgram(/* glsl */`
+      float d = map(fragPixel);
+      vec3 shapeColor = vec3(${32.0 / 255}, ${138 / 255}, ${78 / 255});
+      float shapeAlpha = (1.0 - smoothstep(-0.5, 0.5, d)) * 0.75;
+      vec4 shape = vec4(shapeColor * shapeAlpha, shapeAlpha);
+
+      vec2 lightDir = normalize(lightPos - fragPixel);
+      float lightDist = length(fragPixel - lightPos);
+      float lightRayDistance = march(fragPixel, lightDir);
+      float lightDecay = sqrt(min(lightDist / 512.0, 1.0));
+      vec3 lightColor = mix(vec3(1.0, 1.0, 0.0), vec3(0.0), lightRayDistance >= lightDist ? lightDecay : 1.0);
+      float lightAlpha = smoothstep(-0.5, 0.5, d) * 0.75;
+      vec4 light = vec4(lightColor * lightAlpha, lightAlpha);
+
+      gl_FragColor = vec4(
+        shape.rgb + (light.rgb * (1.0 - shape.a)),
+        shape.a + (light.a * (1.0 - shape.a))
+      );
+    `, /* glsl */`
+      uniform vec2 lightPos;
+      float map(const in vec2 p) {
+        float d;
+        float s;
+        ${shapes.map((shape, i) => /* glsl */`
+          s = sdCircle(p - vec2(float(${shape.x}), float(${shape.y})), float(${shape.radius}));
+          ${i === 0 ? /* glsl */`
+            d = s;
+          ` : /* glsl */`
+            d = ${shape.operation}(d, s);
+          `}
+        `).join('\n')}
+        return d;
+      }
+      float march(const in vec2 rayOrigin, const in vec2 rayDirection) {
+        float rayDistance;
+        vec2 p = rayOrigin;
+        for (int i = 0; i < 1000; i++) {
+          float step = map(p);
+          rayDistance += max(step, float(${minDistance}));
+          p = rayOrigin + rayDirection * rayDistance;
+          if (
+            rayDistance >= float(${maxDistance})
+            || step <= float(${minDistance})
+          ) {
+            break;
+          }
+        }
+        return rayDistance;
+      }
+    `);
+    p.setUniformVec2('lightPos', { x: size.x * 0.5, y: size.y * 0.5 });
+  },
 ];
 
 const p = new Presentation(document.getElementById('app')!, steps);

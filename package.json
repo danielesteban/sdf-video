@@ -7,10 +7,10 @@
     "start": "vite"
   },
   "dependencies": {
-    "gl-matrix": "^3.4.4"
+    "alea": "^1.0.1"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.2"
   }
 }

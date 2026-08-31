@@ -5,7 +5,6 @@ export class Presentation {
   private readonly GLCanvas: HTMLCanvasElement;
 
   private readonly ctx: CanvasRenderingContext2D;
-
   private readonly FGCtx: CanvasRenderingContext2D;
 
   private readonly GL: WebGLRenderingContext;
@@ -18,9 +17,39 @@ export class Presentation {
     time: 0,
   };
   private frame = 0;
+  private onnext: (() => void) | null = null;
+  private hover: { x: number, y: number } | null = null;
   private selected: { x: number, y: number } | null = null;
   private step = 0;
   private readonly steps: (() => void)[] = [];
+
+  // private static lerp(a: number, b: number, t: number) {
+  //   return (1 - t) * a + b * t;
+  // };
+
+  private static operations = {
+    opUnion(a: number, b: number) {
+      return Math.min(a, b);
+    },
+    opSubtraction(a: number, b: number) {
+      return Math.max(a, -b);
+    },
+    opIntersection(a: number, b: number) {
+      return Math.max(a, b);
+    },
+    // opSmoothUnion(a: number, b: number, k: number) {
+    //   const h = Math.min(Math.max(0.5 + 0.5 * (b - a) / k, 0), 1);
+    //   return Presentation.lerp(b, a, h) - k*h*(1-h);
+    // },
+    // opSmoothSubtraction(a: number, b: number, k: number) {
+    //   const h = Math.min(Math.max(0.5 - 0.5 * (a + b) / k, 0), 1);
+    //   return Presentation.lerp(a, -b, h) - k*h*(1-h);
+    // },
+    // opSmoothIntersection(a: number, b: number, k: number) {
+    //   const h = Math.min(Math.max(0.5 + 0.5 * (b - a) / k, 0), 1);
+    //   return Presentation.lerp(a, b, h) - k*h*(1-h);
+    // },
+  };
 
   constructor(app: HTMLElement, steps: (() => void)[] = []) {
     this.app = app;
@@ -87,10 +116,14 @@ export class Presentation {
     };
     this.animate = this.animate.bind(this);
     this.frame = requestAnimationFrame(this.animate);
+    this.oncontextmenu = this.oncontextmenu.bind(this);
+    window.addEventListener('contextmenu', this.oncontextmenu);
     this.onkeydown = this.onkeydown.bind(this);
     window.addEventListener('keydown', this.onkeydown);
     this.onpointerdown = this.onpointerdown.bind(this);
     window.addEventListener('pointerdown', this.onpointerdown);
+    this.onpointermove = this.onpointermove.bind(this);
+    window.addEventListener('pointermove', this.onpointermove);
   }
 
   private animate() {
@@ -101,9 +134,9 @@ export class Presentation {
     clock.time += delta;
     this.clear();
     animation?.(clock.time);
-    if (program) {
+    if (program !== null) {
+      this.setUniformFloat('time', clock.time);
       GL.useProgram(program);
-      GL.uniform1f(GL.getUniformLocation(program, 'time')!, clock.time);
       GL.drawArrays(GL.TRIANGLES, 0, 6);
       GL.useProgram(null);
     }
@@ -118,25 +151,39 @@ export class Presentation {
   }
 
   dispose() {
-    const { app, canvas, FGCanvas, GLCanvas, frame, GL, onkeydown, onpointerdown } = this;
+    const { app, canvas, FGCanvas, GLCanvas, frame, GL, oncontextmenu, onkeydown, onpointerdown, onpointermove } = this;
     GL.getExtension('WEBGL_lose_context')?.loseContext();
     cancelAnimationFrame(frame);
     app.removeChild(canvas);
     app.removeChild(FGCanvas);
     app.removeChild(GLCanvas);
+    window.removeEventListener('contextmenu', oncontextmenu);
     window.removeEventListener('keydown', onkeydown);
     window.removeEventListener('pointerdown', onpointerdown);
+    window.removeEventListener('pointermove', onpointermove);
   }
 
   next() {
-    const { clock, steps } = this;
+    const { clock, onnext, steps } = this;
     clock.tick = performance.now();
     clock.time = 0;
+    this.hover = null;
     this.selected = null;
+    cancelAnimationFrame(this.frame);
+    this.frame = requestAnimationFrame(this.animate);
+    if (onnext) {
+      onnext();
+      return;
+    }
     this.step = (this.step + 1) % steps.length;
     this.setAnimation(null);
+    this.setOnNext(null);
     this.setProgram(null);
     steps[this.step]();
+  }
+
+  private oncontextmenu(e: PointerEvent) {
+    e.preventDefault();
   }
 
   private onkeydown(e: KeyboardEvent) {
@@ -149,13 +196,30 @@ export class Presentation {
     const { canvas } = this;
     const rect = canvas.getBoundingClientRect();
     if (
-      e.clientX < rect.left || e.clientX > rect.right
+      e.button !== 0
+      || e.clientX < rect.left || e.clientX > rect.right
       || e.clientY < rect.top || e.clientY > rect.bottom
     ) {
       this.selected = null;
       return;
     }
     this.selected = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  }
+
+  private onpointermove(e: PointerEvent) {
+    const { canvas } = this;
+    const rect = canvas.getBoundingClientRect();
+    if (
+      e.clientX < rect.left || e.clientX > rect.right
+      || e.clientY < rect.top || e.clientY > rect.bottom
+    ) {
+      this.hover = null;
+      return;
+    }
+    this.hover = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     };
@@ -210,7 +274,7 @@ export class Presentation {
       x: Math.ceil(canvas.width / size),
       y: Math.ceil(canvas.height / size),
     };
-    const min = values.reduce((min, d) => Math.min(min, d / size), 10000);
+    const min = values.reduce((min, d) => Math.min(min, d / size), Infinity);
     ctx.fillStyle = '#000000';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
@@ -222,6 +286,62 @@ export class Presentation {
         }
       }
     }
+  }
+
+  drawRay(
+    ray: { origin: { x: number; y: number }; direction: { x: number; y: number }},
+    steps: { x: number; y: number; distance: number }[],
+    time: number | null = null
+  ) {
+    const { ctx } = this;
+    const angle = Math.atan2(ray.direction.y, ray.direction.x) - Math.PI;
+    const step = steps[steps.length - 1] || {
+      x: ray.origin.x,
+      y: ray.origin.y,
+      distance: 64,
+    };
+    const distance = Math.max((time ? Math.min(step.distance * time * 2, step.distance) : step.distance) - 1, steps.length === 1 ? 63 : 0);
+    const point = {
+      x: step.x + ray.direction.x * distance,
+      y: step.y + ray.direction.y * distance,
+    };
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (let i = 0, l = steps.length; i < l; i++) {
+      const step = steps[i];
+      const distance = i === l - 1 && time ? Math.min(step.distance * time * 2, step.distance) : step.distance;
+      ctx.lineWidth = 1;
+      ctx.fillStyle = 'rgba(255, 255, 153, 0.3)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.beginPath();
+      ctx.arc(step.x, step.y, distance, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(step.x, step.y, distance, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    for (let i = 0 ; i < 2; i++) {
+      ctx.lineWidth = i === 0 ? 6 : 4;
+      ctx.strokeStyle = i === 0 ? '#000000' : '#ffff99';
+      ctx.beginPath();
+      ctx.moveTo(ray.origin.x, ray.origin.y);
+      ctx.lineTo(point.x, point.y);
+      ctx.moveTo(point.x + Math.cos(angle - Math.PI * 0.25) * 16, point.y + Math.sin(angle - Math.PI * 0.25) * 16);
+      ctx.lineTo(point.x, point.y);
+      ctx.lineTo(point.x + Math.cos(angle + Math.PI * 0.25) * 16, point.y + Math.sin(angle + Math.PI * 0.25) * 16);
+      ctx.stroke();
+    }
+
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#ffff99';
+    ctx.strokeStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(ray.origin.x, ray.origin.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
   }
 
   drawText(lines: string[]) {
@@ -296,6 +416,42 @@ export class Presentation {
     }
   }
 
+  static computeDistance(
+    shapes: { x: number; y: number; radius: number; operation: keyof typeof Presentation.operations }[],
+    point: { x: number; y: number }
+  ) {
+    const { operations } = Presentation;
+    return shapes.reduce((d, shape) => (
+      operations[shape.operation](
+        d,
+        Math.sqrt((point.x - shape.x) ** 2 + (point.y - shape.y) ** 2) - shape.radius
+      )
+    ), Infinity);
+  }
+
+  computeDistances(
+    shapes: { x: number; y: number; radius: number; operation: keyof typeof Presentation.operations }[],
+    size: number
+  ) {
+    const { canvas } = this;
+    const { computeDistance } = Presentation;
+    const cells = {
+      x: Math.ceil(canvas.width / size),
+      y: Math.ceil(canvas.height / size),
+    };
+    const distances = new Float32Array(cells.x * cells.y);
+    for (let y = 0, i = 0; y < cells.y; y += 1) {
+      for (let x = 0; x < cells.x; x += 1, i += 1) {
+        distances[i] = computeDistance(shapes, { x: (x + 0.5) * size, y: (y + 0.5) * size });
+      }
+    }
+    return distances;
+  }
+
+  getHover() {
+    return this.hover;
+  }
+
   getSize() {
     return { x: this.canvas.width, y: this.canvas.height };
   }
@@ -308,9 +464,13 @@ export class Presentation {
     this.animation = animation;
   }
 
-  setProgram(code: string | null) {
+  setOnNext(onnext: (() => void) | null) {
+    this.onnext = onnext;
+  }
+
+  setProgram(code: string | null, globals: string | null = null) {
     const { canvas, GL, screen } = this;
-    if (this.program) {
+    if (this.program !== null) {
       GL.deleteProgram(this.program);
       this.program = null;
     }
@@ -334,6 +494,7 @@ export class Presentation {
       #define PI 3.141592653589793
 
       uniform float time;
+      uniform vec2 test;
       varying vec2 fragPixel;
 
       float sdCircle(const in vec2 p, const in float r) {
@@ -367,6 +528,8 @@ export class Presentation {
         return mix(a, b, h) - k*h*(1.0-h);
       }
 
+      ${globals || ''}
+
       void main(void) {
         ${code}
       }
@@ -393,5 +556,33 @@ export class Presentation {
     GL.useProgram(null);
 
     this.program = program;
+  }
+
+  setUniformFloat(name: string, value: number) {
+    const { GL, program } = this;
+    if (program === null) {
+      return;
+    }
+    const location = GL.getUniformLocation(program, name);
+    if (location === null) {
+      return;
+    }
+    GL.useProgram(program);
+    GL.uniform1f(location, value);
+    GL.useProgram(null);
+  }
+
+  setUniformVec2(name: string, value: { x: number, y: number }) {
+    const { GL, program } = this;
+    if (program === null) {
+      return;
+    }
+    const location = GL.getUniformLocation(program, name);
+    if (location === null) {
+      return;
+    }
+    GL.useProgram(program);
+    GL.uniform2f(location, value.x, value.y);
+    GL.useProgram(null);
   }
 }
